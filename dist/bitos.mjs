@@ -1388,6 +1388,7 @@ ${receipt}
 }
 
 // src/main.ts
+var NPM_PACKAGE = "@bitos.dev/bitos";
 var HELP = `bitos \u2014 every web3 intelligence, one command away.
 
 USAGE
@@ -1407,7 +1408,7 @@ COMMANDS
   status                    Gateway health at a glance
   config set <k> <v>        Set gateway | beta-password
   install                   Put bitos on your PATH (~/.local/bin) so it runs anywhere
-  update                    Replace this binary with the gateway's latest (npm installs: npm i -g bitos@latest)
+  update                    Replace this binary with the gateway's latest (npm installs: npm i -g @bitos.dev/bitos@latest)
   version                   Print the version
 
 Files live in your account's folder on the gateway, mirrored to the
@@ -1662,7 +1663,7 @@ async function cmdUpdate() {
   const self = process.argv[1] ?? fatal("cannot locate this binary");
   if (installedWithNpm(self)) {
     out("bitos is installed through npm \u2014 update it the npm way:");
-    out("  npm i -g bitos@latest");
+    out(`  npm i -g ${NPM_PACKAGE}@latest`);
     return;
   }
   const config = loadConfig();

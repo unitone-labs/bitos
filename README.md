@@ -9,9 +9,9 @@ networks BitOS routes to, and a receipt for every step.
 ## Install
 
 ```
-npm i -g bitos          # Node 20 or newer
-bitos login             # your browser opens; your wallet signs there
-bitos                   # the console
+npm i -g @bitos.dev/bitos   # Node 20 or newer; the command is `bitos`
+bitos login                 # your browser opens; your wallet signs there
+bitos                       # the console
 ```
 
 `bitos update` tells you how to update the way you installed. On a
