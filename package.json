@@ -1,0 +1,36 @@
+{
+  "name": "bitos",
+  "version": "0.1.0",
+  "description": "bitos: the BitOS console in your terminal — an agent on your machine, inference from decentralized web3 networks.",
+  "keywords": [
+    "bitos",
+    "cli",
+    "agent",
+    "bittensor",
+    "web3",
+    "decentralized-ai",
+    "coding-assistant"
+  ],
+  "homepage": "https://bitos.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unitone-labs/bitos.git"
+  },
+  "bugs": {
+    "url": "https://github.com/unitone-labs/bitos/issues"
+  },
+  "type": "module",
+  "bin": {
+    "bitos": "dist/bitos.mjs"
+  },
+  "files": [
+    "dist/bitos.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

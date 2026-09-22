@@ -1,0 +1,33 @@
+# The standalone `bitos` package repository publishes to npm on a tag `v<version>`.
+# The tag must match package.json, and the repository needs the secret NPM_TOKEN
+# (an npm automation token). `dist/bitos.mjs` is committed here by the monorepo's
+# scripts/export-cli-package.sh, so nothing is built in this job.
+name: publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: the tag must name the version in package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          test "$tag" = "$pkg" || { echo "tag $tag != package.json $pkg"; exit 1; }
+      - run: node dist/bitos.mjs version
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
