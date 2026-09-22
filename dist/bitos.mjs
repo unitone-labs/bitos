@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/main.ts
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 import os7 from "node:os";
-import path9 from "node:path";
+import path10 from "node:path";
 import { spawn } from "node:child_process";
 
 // src/config.ts
@@ -74,13 +74,13 @@ async function fail(res) {
   }
   throw new GatewayError(detail !== "" ? detail : `HTTP ${res.status}`, res.status);
 }
-async function getJson(config, path10) {
-  const res = await fetch(`${config.gateway}${path10}`, { headers: headers(config) });
+async function getJson(config, path11) {
+  const res = await fetch(`${config.gateway}${path11}`, { headers: headers(config) });
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function postJson(config, path10, body) {
-  const res = await fetch(`${config.gateway}${path10}`, {
+async function postJson(config, path11, body) {
+  const res = await fetch(`${config.gateway}${path11}`, {
     method: "POST",
     headers: headers(config, { "content-type": "application/json" }),
     body: JSON.stringify(body)
@@ -88,8 +88,8 @@ async function postJson(config, path10, body) {
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function postBytes(config, path10, bytes, extra) {
-  const res = await fetch(`${config.gateway}${path10}`, {
+async function postBytes(config, path11, bytes, extra) {
+  const res = await fetch(`${config.gateway}${path11}`, {
     method: "POST",
     headers: headers(config, { "content-type": "application/octet-stream", ...extra }),
     body: bytes
@@ -97,13 +97,13 @@ async function postBytes(config, path10, bytes, extra) {
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function getBytes(config, path10) {
-  const res = await fetch(`${config.gateway}${path10}`, { headers: headers(config) });
+async function getBytes(config, path11) {
+  const res = await fetch(`${config.gateway}${path11}`, { headers: headers(config) });
   if (!res.ok) await fail(res);
   return new Uint8Array(await res.arrayBuffer());
 }
-async function del(config, path10) {
-  const res = await fetch(`${config.gateway}${path10}`, {
+async function del(config, path11) {
+  const res = await fetch(`${config.gateway}${path11}`, {
     method: "DELETE",
     headers: headers(config)
   });
@@ -160,7 +160,7 @@ async function streamTask(config, body, handlers = {}) {
 }
 
 // src/repl.ts
-import path8 from "node:path";
+import path9 from "node:path";
 import readline from "node:readline";
 
 // ../../packages/agent/src/tools.ts
@@ -663,6 +663,31 @@ ${block}` }];
     this.messages.length = 1;
     this.recent = [];
   }
+  /** The conversation so far, without the system prompt: what a session file keeps. */
+  history() {
+    return structuredClone(this.messages.slice(1));
+  }
+  /** Continue an earlier conversation: its messages after this session's own system prompt. */
+  restore(history) {
+    this.messages.length = 1;
+    for (const m of history) {
+      if (m.role === "system") continue;
+      this.messages.push(structuredClone(m));
+    }
+    this.recent = [];
+  }
+  /** The turn in flight, so it can be cut short. */
+  aborter = null;
+  /**
+   * Stop the running turn: the completion in flight is abandoned and the
+   * turn's messages are dropped, so the conversation stays consistent. A
+   * tool already running (a shell command, say) finishes on its own.
+   */
+  cancel() {
+    if (this.aborter === null) return false;
+    this.aborter.abort();
+    return true;
+  }
   /** Signatures of the last calls, for the repeat guard. */
   recent = [];
   /**
@@ -670,7 +695,7 @@ ${block}` }];
    * third time the user is asked, and a no goes back as a refusal.
    */
   async guarded(call) {
-    const signature = `${call.function.name}\0${call.function.arguments}`;
+    const signature = `${call.function.name}(${call.function.arguments})`;
     const repeats = this.recent.filter((s) => s === signature).length;
     this.recent = [...this.recent.slice(-(REPEAT_LIMIT - 2)), signature];
     if (repeats >= REPEAT_LIMIT - 1) {
@@ -681,6 +706,7 @@ ${block}` }];
   }
   /** One user turn: loops through tool calls until the model answers in prose. */
   async turn(input) {
+    const base = this.messages.length;
     this.messages.push({ role: "user", content: input });
     const usdBefore = this.totalUsd;
     const tokensBefore = { ...this.totalTokens };
@@ -691,26 +717,45 @@ ${block}` }];
       usd: this.totalUsd - usdBefore,
       tokens: { input: this.totalTokens.input - tokensBefore.input, output: this.totalTokens.output - tokensBefore.output }
     });
+    const aborter = new AbortController();
+    this.aborter = aborter;
+    const cancelled = (rounds2, toolCalls2) => {
+      this.messages.length = base;
+      this.recent = [];
+      return { ...done("Cancelled.", rounds2, toolCalls2), cancelled: true };
+    };
     let rounds = 0;
     let toolCalls = 0;
-    for (; ; ) {
-      if (rounds >= this.maxRounds) {
-        return done(`Stopped after ${this.maxRounds} rounds without a final answer \u2014 tell me how to continue.`, rounds, toolCalls);
+    try {
+      for (; ; ) {
+        if (rounds >= this.maxRounds) {
+          return done(`Stopped after ${this.maxRounds} rounds without a final answer \u2014 tell me how to continue.`, rounds, toolCalls);
+        }
+        rounds++;
+        this.events.onThinking();
+        let reply;
+        try {
+          reply = await this.complete(aborter.signal);
+        } catch (err) {
+          if (aborter.signal.aborted) return cancelled(rounds, toolCalls);
+          throw err;
+        }
+        const calls = reply.tool_calls ?? [];
+        this.messages.push({ role: "assistant", content: reply.content, ...calls.length > 0 ? { tool_calls: calls } : {} });
+        if (calls.length === 0) {
+          return done(reply.content ?? "", rounds, toolCalls);
+        }
+        for (const call of calls) {
+          if (aborter.signal.aborted) return cancelled(rounds, toolCalls);
+          toolCalls++;
+          const result = await this.guarded(call);
+          this.messages.push({ role: "tool", content: result, tool_call_id: call.id });
+        }
+        if (aborter.signal.aborted) return cancelled(rounds, toolCalls);
+        this.trim();
       }
-      rounds++;
-      this.events.onThinking();
-      const reply = await this.complete();
-      const calls = reply.tool_calls ?? [];
-      this.messages.push({ role: "assistant", content: reply.content, ...calls.length > 0 ? { tool_calls: calls } : {} });
-      if (calls.length === 0) {
-        return done(reply.content ?? "", rounds, toolCalls);
-      }
-      for (const call of calls) {
-        toolCalls++;
-        const result = await this.guarded(call);
-        this.messages.push({ role: "tool", content: result, tool_call_id: call.id });
-      }
-      this.trim();
+    } finally {
+      this.aborter = null;
     }
   }
   /** Keep the context bounded: the oldest tool results collapse to a stub. */
@@ -725,11 +770,12 @@ ${block}` }];
       }
     }
   }
-  async complete() {
+  async complete(signal) {
     const key = await this.transport.authorization();
     const doFetch = this.transport.fetch ?? globalThis.fetch;
     const res = await doFetch(`${this.transport.gateway}/v1/chat/completions`, {
       method: "POST",
+      ...signal !== void 0 ? { signal } : {},
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${key}`,
@@ -982,7 +1028,7 @@ var Agent2 = class extends Agent {
 // src/install.ts
 import fs6 from "node:fs";
 import path7 from "node:path";
-var VERSION = true ? "0.1.2" : "dev";
+var VERSION = true ? "0.1.3" : "dev";
 var BUILD = true ? "2026-09-22" : "unbundled";
 function installedWithNpm(self) {
   let real = self;
@@ -996,6 +1042,97 @@ function describeInstall(self, gateway) {
   const where2 = self === void 0 ? "unknown location" : installedWithNpm(self) ? "npm" : `copy at ${self.replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~")}`;
   return `bitos ${VERSION} \xB7 build ${BUILD} \xB7 ${where2}${installedWithNpm(self ?? "") ? "" : ` \xB7 updates from ${gateway}`}`;
 }
+
+// src/sessions.ts
+import fs7 from "node:fs";
+import path8 from "node:path";
+var SESSIONS_DIR = path8.join(".bitos", "sessions");
+var MAX_SESSIONS = 30;
+function stamp(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+function isRecord(v) {
+  if (typeof v !== "object" || v === null) return false;
+  const r = v;
+  return typeof r["id"] === "string" && typeof r["updatedAt"] === "string" && Array.isArray(r["messages"]) && typeof r["turns"] === "number";
+}
+var SessionStore = class {
+  constructor(cwd) {
+    this.cwd = cwd;
+    this.dir = path8.join(cwd, SESSIONS_DIR);
+  }
+  dir;
+  /** A fresh record; nothing touches the disk until the first save. */
+  create(model) {
+    const now = /* @__PURE__ */ new Date();
+    return {
+      id: stamp(now),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      cwd: this.cwd,
+      model,
+      turns: 0,
+      usd: 0,
+      tokens: { input: 0, output: 0 },
+      messages: []
+    };
+  }
+  /** Write the record; the folder is created on the first save and ignores itself. */
+  save(record) {
+    const next = { ...record, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    fs7.mkdirSync(this.dir, { recursive: true });
+    const ignore = path8.join(this.cwd, ".bitos", ".gitignore");
+    if (!fs7.existsSync(ignore)) fs7.writeFileSync(ignore, "*\n");
+    fs7.writeFileSync(path8.join(this.dir, `${next.id}.json`), `${JSON.stringify(next, null, 1)}
+`);
+    this.prune();
+    return next;
+  }
+  /** Every session in this folder, newest first; unreadable files are skipped. */
+  list() {
+    let names;
+    try {
+      names = fs7.readdirSync(this.dir).filter((n) => n.endsWith(".json"));
+    } catch {
+      return [];
+    }
+    const out2 = [];
+    for (const name of names) {
+      try {
+        const parsed = JSON.parse(fs7.readFileSync(path8.join(this.dir, name), "utf8"));
+        if (isRecord(parsed)) out2.push(parsed);
+      } catch {
+      }
+    }
+    return out2.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+  /** The session to continue: the newest one that holds a conversation. */
+  latest() {
+    return this.list().find((s) => s.turns > 0 && s.messages.length > 0) ?? null;
+  }
+  /** How a session reads in the banner and in /sessions. */
+  label(record) {
+    const when = new Date(record.updatedAt);
+    const today = /* @__PURE__ */ new Date();
+    const sameDay = when.toDateString() === today.toDateString();
+    const p = (n) => String(n).padStart(2, "0");
+    const time = `${p(when.getHours())}:${p(when.getMinutes())}`;
+    const day = sameDay ? "today" : `${when.getFullYear()}-${p(when.getMonth() + 1)}-${p(when.getDate())}`;
+    const first = record.messages.find((m) => m.role === "user")?.content ?? "";
+    const gist = first.replace(/\s+/g, " ").slice(0, 48);
+    return `${day} ${time} \xB7 ${record.turns} turn${record.turns === 1 ? "" : "s"}${gist === "" ? "" : ` \xB7 "${gist}${first.length > 48 ? "\u2026" : ""}"`}`;
+  }
+  prune() {
+    const all = this.list();
+    for (const old of all.slice(MAX_SESSIONS)) {
+      try {
+        fs7.rmSync(path8.join(this.dir, `${old.id}.json`));
+      } catch {
+      }
+    }
+  }
+};
 
 // src/ui.ts
 var isTTY = process.stdout.isTTY === true;
@@ -1087,6 +1224,27 @@ var Live = class {
     this.label = null;
     if (isTTY) this.draw();
   }
+  paused = false;
+  /**
+   * Hand the terminal to a question (a permission prompt): the strip stops
+   * redrawing and clears its line, so the prompt stays where the user can
+   * see it and answer it. `resume` brings the strip back.
+   */
+  pause() {
+    this.paused = true;
+    this.label = null;
+    this.stopTimer();
+    if (isTTY) process.stdout.write("\r\x1B[2K");
+  }
+  resume() {
+    this.paused = false;
+    if (!isTTY || !this.running) return;
+    this.timer = setInterval(() => {
+      this.t++;
+      this.draw();
+    }, 80);
+    this.draw();
+  }
   learn(route) {
     this.route = { ...this.route, ...route };
     if (isTTY) {
@@ -1100,7 +1258,7 @@ var Live = class {
   }
   /** Print a line above the live line. */
   print(text) {
-    if (isTTY && this.running) {
+    if (isTTY && this.running && !this.paused) {
       process.stdout.write(`\r\x1B[2K${text}
 `);
       this.draw();
@@ -1198,9 +1356,14 @@ var REPL_HELP = `${c.bold("bitos console")} \u2014 an agent in this directory.
   here and run commands. Reads just happen; writes and commands ask first \u2014
   answer y / n, or a (always, for this session).
 
+  The conversation is kept in .bitos/ here and continues next time you
+  run bitos in this folder. Ctrl-C cancels the turn in progress.
+
   /model [id|auto] pin a model (provider::model, see /models) or let the brain route
   /models          the models you can pin, from every network
   /usage           this session's tokens and cost
+  /sessions        this folder's sessions, newest first
+  /resume <n>      continue one of them
   /agent           agent mode (tools, this directory)
   /chat            plain mode: one task per line on the brain, no tools
   /lane <name>     in chat mode, pin the lane (${LANES.join(", ")})
@@ -1262,6 +1425,11 @@ async function runRepl() {
   const skills = discoverSkills(cwd);
   const startModel = process.env["BITOS_MODEL"] ?? config.model ?? AUTO_MODEL;
   let turns = 0;
+  const sessions = new SessionStore(cwd);
+  const resumed = process.argv.includes("--new") ? null : sessions.latest();
+  let session = resumed ?? sessions.create(startModel);
+  if (resumed !== null) turns = resumed.turns;
+  let running = false;
   process.stdout.write(
     `${banner([
       "",
@@ -1269,11 +1437,11 @@ async function runRepl() {
       c.dim(describeInstall(process.argv[1], config.gateway)),
       c.dim(config.gateway),
       c.dim(address !== null ? `${address.slice(0, 8)}\u2026${address.slice(-6)}` : "anonymous \xB7 dev gateway"),
-      "",
+      c.dim(resumed !== null ? `session ${sessions.label(resumed)} \xB7 /new for a fresh one` : "new session \xB7 kept in .bitos/ as you go"),
       c.dim(`agent in ${cwd}${branch !== null ? ` \xB7 ${branch}` : ""}`),
       c.dim(`model ${modelLabel(startModel)}`),
       c.dim(
-        `${rules.project !== null ? path8.basename(rules.project.path) : "no AGENTS.md"} \xB7 ${skills.length} skill${skills.length === 1 ? "" : "s"} on this machine`
+        `${rules.project !== null ? path9.basename(rules.project.path) : "no AGENTS.md"} \xB7 ${skills.length} skill${skills.length === 1 ? "" : "s"} on this machine`
       ),
       c.dim("/help for commands \xB7 /exit to leave")
     ])}
@@ -1297,10 +1465,12 @@ async function runRepl() {
     cwd: process.cwd(),
     confirm: async (tool, summary) => {
       if (autoYes) return true;
-      live.rest();
-      live.print(`
-${c.amber("?")} ${c.bold(tool)}  ${summary}`);
+      live.pause();
+      process.stdout.write(`
+${c.amber("?")} ${c.bold(tool)}  ${summary}
+`);
       const answer = (await ask(`${c.dim("allow? [y/n/a]")} `)).trim().toLowerCase();
+      live.resume();
       if (answer === "a" || answer === "always") {
         autoYes = true;
         return true;
@@ -1322,6 +1492,26 @@ ${c.amber("?")} ${c.bold(tool)}  ${summary}`);
       live.print(c.dim(`    \u21B3 ${first}${result.includes("\n") ? " \u2026" : ""} (${ms}ms)`));
     }
   }, startModel);
+  const load = (record) => {
+    agent.restore(record.messages);
+    agent.totalUsd = record.usd;
+    agent.totalTokens.input = record.tokens.input;
+    agent.totalTokens.output = record.tokens.output;
+    turns = record.turns;
+    if (record.threadId !== void 0) threadId = record.threadId;
+  };
+  if (resumed !== null) load(resumed);
+  const persist = () => {
+    session = sessions.save({
+      ...session,
+      turns,
+      usd: agent.totalUsd,
+      tokens: { ...agent.totalTokens },
+      model: agent.currentModel,
+      messages: agent.history(),
+      ...threadId !== void 0 ? { threadId } : {}
+    });
+  };
   const handle = async (line) => {
     const text = line.trim();
     if (text === "") return;
@@ -1402,8 +1592,38 @@ ${c.dim("  /model <id> to pin one \xB7 /model auto to let the brain route")}
         case "new":
           threadId = await newThread(config);
           agent.reset();
-          process.stdout.write(c.dim("new thread\n"));
+          agent.totalUsd = 0;
+          agent.totalTokens.input = 0;
+          agent.totalTokens.output = 0;
+          turns = 0;
+          session = sessions.create(agent.currentModel);
+          process.stdout.write(c.dim("new session\n"));
           return;
+        case "sessions": {
+          const all = sessions.list();
+          if (all.length === 0) {
+            process.stdout.write(c.dim("no sessions in this folder yet\n"));
+            return;
+          }
+          all.forEach((s, i) => process.stdout.write(`  ${s.id === session.id ? c.amber("\u25CF") : c.dim("\u25CB")} ${i + 1}. ${sessions.label(s)}
+`));
+          process.stdout.write(c.dim("  /resume <n> to continue one\n"));
+          return;
+        }
+        case "resume": {
+          const n = Number(rest[0]);
+          const pick = sessions.list()[n - 1];
+          if (rest[0] === void 0 || !Number.isInteger(n) || pick === void 0) {
+            process.stdout.write(`${c.red("usage:")} /resume <n> \u2014 see /sessions
+`);
+            return;
+          }
+          session = pick;
+          load(pick);
+          process.stdout.write(c.dim(`continuing ${sessions.label(pick)}
+`));
+          return;
+        }
         case "agent":
           mode = "agent";
           process.stdout.write(c.dim(`agent mode in ${process.cwd()}
@@ -1431,8 +1651,16 @@ ${c.dim("  /model <id> to pin one \xB7 /model auto to let the brain route")}
     let steps = 0;
     if (mode === "agent") {
       live.start();
+      running = true;
       try {
         const done = await agent.turn(text);
+        if (done.cancelled === true) {
+          live.finish();
+          process.stdout.write(`${c.dim("cancelled \u2014 that turn was dropped")}
+
+`);
+          return;
+        }
         turns++;
         live.learn({ usd: done.usd });
         const receipt = live.finish(
@@ -1444,11 +1672,14 @@ ${renderMarkdown(done.text)}
 ${receipt}
 
 `);
+        persist();
       } catch (err) {
         live.finish();
         process.stdout.write(`${c.red("\u2717")} ${err instanceof Error ? err.message : String(err)}
 
 `);
+      } finally {
+        running = false;
       }
       return;
     }
@@ -1498,6 +1729,7 @@ ${renderMarkdown(outcome.output ?? "")}
 ${receipt}
 
 `);
+      persist();
     } catch (err) {
       live.finish();
       process.stdout.write(`${c.red("\u2717")} ${err instanceof Error ? err.message : String(err)}
@@ -1539,6 +1771,20 @@ ${receipt}
     inputDone = true;
     if (!pumping && queue.length === 0) leave();
   });
+  rl.on("SIGINT", () => {
+    if (running && agent.cancel()) {
+      live.print(c.dim("cancelling\u2026"));
+      return;
+    }
+    if (pendingAnswer !== null) {
+      const resolve = pendingAnswer;
+      pendingAnswer = null;
+      process.stdout.write("\n");
+      resolve("n");
+      return;
+    }
+    leave();
+  });
   prompt();
 }
 
@@ -1549,6 +1795,7 @@ var HELP = `bitos \u2014 every web3 intelligence, one command away.
 USAGE
   bitos                     Open the console: an agent in this folder
   bitos --model <id>        The console on a pinned model (provider::model, or auto)
+  bitos --new               The console on a fresh session (it continues the folder's last one otherwise)
   bitos <command> [args]
 
 COMMANDS
@@ -1688,14 +1935,14 @@ function fmtBytes(n) {
   return n < 1024 * 1024 ? `${(n / 1024).toFixed(1)}K` : `${(n / (1024 * 1024)).toFixed(1)}M`;
 }
 function walk(root, base) {
-  const stat = fs7.statSync(root);
-  if (stat.isFile()) return [{ abs: root, dir: base, name: path9.basename(root) }];
+  const stat = fs8.statSync(root);
+  if (stat.isFile()) return [{ abs: root, dir: base, name: path10.basename(root) }];
   if (!stat.isDirectory()) return [];
-  const folder = base === "" ? path9.basename(root) : `${base}/${path9.basename(root)}`;
+  const folder = base === "" ? path10.basename(root) : `${base}/${path10.basename(root)}`;
   const found = [];
-  for (const entry of fs7.readdirSync(root)) {
+  for (const entry of fs8.readdirSync(root)) {
     if (entry.startsWith(".")) continue;
-    found.push(...walk(path9.join(root, entry), folder));
+    found.push(...walk(path10.join(root, entry), folder));
   }
   return found;
 }
@@ -1718,9 +1965,9 @@ async function cmdFiles(args) {
     const targets = args.slice(1);
     if (targets.length === 0) fatal("usage: bitos files put <file-or-folder\u2026>");
     for (const target of targets) {
-      if (!fs7.existsSync(target)) fatal(`no such path: ${target}`);
-      for (const f of walk(path9.resolve(target), "")) {
-        const bytes = fs7.readFileSync(f.abs);
+      if (!fs8.existsSync(target)) fatal(`no such path: ${target}`);
+      for (const f of walk(path10.resolve(target), "")) {
+        const bytes = fs8.readFileSync(f.abs);
         await postBytes(config, "/api/files", new Uint8Array(bytes), {
           "x-file-name": encodeURIComponent(f.name),
           ...f.dir !== "" ? { "x-file-dir": encodeURIComponent(f.dir) } : {}
@@ -1740,7 +1987,7 @@ async function cmdFiles(args) {
     }
     const oFlag = args.indexOf("-o");
     const dest = oFlag !== -1 ? args[oFlag + 1] ?? fatal("-o needs a path") : row.name;
-    fs7.writeFileSync(dest, bytes);
+    fs8.writeFileSync(dest, bytes);
     out(`\u2193 ${dest} (${fmtBytes(bytes.length)})`);
     return;
   }
@@ -1799,21 +2046,21 @@ function cmdInstall(args) {
     out("bitos is installed through npm and already on your PATH; nothing to do.");
     return;
   }
-  const code = fs7.readFileSync(self, "utf8");
+  const code = fs8.readFileSync(self, "utf8");
   if (!code.startsWith("#!/usr/bin/env node")) fatal("run install from the downloaded bitos script");
   const explicit = args.indexOf("--dir");
-  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path9.join(os7.homedir(), ".local", "bin")];
+  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path10.join(os7.homedir(), ".local", "bin")];
   for (const dir of candidates) {
     try {
-      fs7.mkdirSync(dir, { recursive: true });
-      fs7.accessSync(dir, fs7.constants.W_OK);
+      fs8.mkdirSync(dir, { recursive: true });
+      fs8.accessSync(dir, fs8.constants.W_OK);
     } catch {
       continue;
     }
-    const dest = path9.join(dir, "bitos");
-    fs7.writeFileSync(dest, code, { mode: 493 });
+    const dest = path10.join(dir, "bitos");
+    fs8.writeFileSync(dest, code, { mode: 493 });
     out(`installed ${dest}`);
-    const onPath = (process.env["PATH"] ?? "").split(path9.delimiter).includes(dir);
+    const onPath = (process.env["PATH"] ?? "").split(path10.delimiter).includes(dir);
     if (!onPath) {
       const rc = (process.env["SHELL"] ?? "").endsWith("zsh") ? "~/.zshrc" : "~/.bashrc";
       out(`${dir} is not on your PATH yet \u2014 add this line to ${rc}, then open a new terminal:`);
@@ -1839,13 +2086,13 @@ async function cmdUpdate() {
   if (!res.ok) fatal(`the gateway has no CLI build to offer (HTTP ${res.status})`);
   const code = await res.text();
   if (!code.startsWith("#!/usr/bin/env node")) fatal("downloaded file does not look like bitos");
-  fs7.writeFileSync(self, code, { mode: 493 });
+  fs8.writeFileSync(self, code, { mode: 493 });
   out(`updated ${self}`);
 }
 async function main() {
   const major = Number(process.versions.node.split(".")[0]);
   if (major < 20) fatal(`Node ${process.versions.node} is too old \u2014 bitos needs Node 20 or newer`);
-  const argv = process.argv.slice(2).filter((a) => a !== "--yes");
+  const argv = process.argv.slice(2).filter((a) => a !== "--yes" && a !== "--new");
   const modelFlag = argv.indexOf("--model");
   if (modelFlag !== -1) {
     const want = argv[modelFlag + 1] ?? fatal("--model needs an id \u2014 see: bitos models");

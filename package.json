@@ -1,6 +1,6 @@
 {
   "name": "bitos-cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "bitos: the BitOS console in your terminal — an agent on your machine, inference from decentralized web3 networks.",
   "keywords": [
     "bitos",

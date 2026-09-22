@@ -49,6 +49,16 @@ What the agent knows about your project:
 - **No loops.** The same call three times running is stopped and you are
   asked.
 
+## Sessions
+
+The conversation is kept in `.bitos/sessions/` in the folder you run
+`bitos` in, written after every turn, and the next `bitos` there continues
+it — say "continue" and the agent knows what you meant. `bitos --new`
+starts fresh, `/sessions` lists the folder's sessions, `/resume <n>`
+switches to one. The folder ignores itself in git. Ctrl-C cancels the
+turn in progress (the messages of that turn are dropped) and leaves only
+when nothing is running.
+
 ## Models and cost
 
 By default the brain routes every call (`auto`: the code lane, the best
