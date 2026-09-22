@@ -17,6 +17,11 @@ bitos                   # the console
 `bitos update` tells you how to update the way you installed. On a
 private-beta gateway, set the password first: `bitos config set beta-password …`.
 
+If the banner says `copy at …` although you installed with npm, a
+downloaded copy earlier on your PATH is running instead of the npm one.
+The banner (and `bitos version`, `bitos update`) names the copy that is
+hidden and the `rm` that puts npm's back in charge.
+
 Without npm, from a running gateway:
 
 ```

@@ -2,7 +2,7 @@
 
 // src/main.ts
 import fs8 from "node:fs";
-import os7 from "node:os";
+import os8 from "node:os";
 import path10 from "node:path";
 import { spawn } from "node:child_process";
 
@@ -609,14 +609,27 @@ async function runTool(tools, call, ctx, events) {
     return "ERROR: arguments were not valid JSON";
   }
   events.onToolStart(tool.name, args);
+  let waited = 0;
+  const timed = {
+    ...ctx,
+    confirm: async (name, summary) => {
+      const asked = Date.now();
+      try {
+        return await ctx.confirm(name, summary);
+      } finally {
+        waited += Date.now() - asked;
+      }
+    }
+  };
   const started = Date.now();
+  const elapsed = () => Date.now() - started - waited;
   try {
-    const result = await tool.run(args, ctx);
-    events.onToolEnd(tool.name, result, Date.now() - started);
+    const result = await tool.run(args, timed);
+    events.onToolEnd(tool.name, result, elapsed());
     return result;
   } catch (err) {
     const msg = `ERROR: ${err instanceof Error ? err.message : String(err)}`;
-    events.onToolEnd(tool.name, msg, Date.now() - started);
+    events.onToolEnd(tool.name, msg, elapsed());
     return msg;
   }
 }
@@ -1027,20 +1040,92 @@ var Agent2 = class extends Agent {
 
 // src/install.ts
 import fs6 from "node:fs";
+import os7 from "node:os";
 import path7 from "node:path";
-var VERSION = true ? "0.1.3" : "dev";
+var VERSION = true ? "0.1.4" : "dev";
 var BUILD = true ? "2026-09-22" : "unbundled";
-function installedWithNpm(self) {
-  let real = self;
+var FOOTER = /\/\/ bitos (\S+) build (\S+)\s*$/;
+var FOOTER_BYTES = 200;
+function realpath(file) {
   try {
-    real = fs6.realpathSync(self);
+    return fs6.realpathSync(file);
   } catch {
+    return file;
   }
-  return real.split(path7.sep).includes("node_modules");
+}
+function installedWithNpm(self) {
+  return realpath(self).split(path7.sep).includes("node_modules");
+}
+function tilde(file, home = os7.homedir()) {
+  return file === home || file.startsWith(home + path7.sep) ? `~${file.slice(home.length)}` : file;
+}
+function versionOf(file) {
+  let fd = null;
+  try {
+    const size = fs6.statSync(file).size;
+    const length = Math.min(FOOTER_BYTES, size);
+    const tail = Buffer.alloc(length);
+    fd = fs6.openSync(file, "r");
+    fs6.readSync(fd, tail, 0, length, size - length);
+    const match = FOOTER.exec(tail.toString("utf8"));
+    return match === null ? null : { version: match[1], build: match[2] };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) fs6.closeSync(fd);
+  }
+}
+function pathDirs(env) {
+  return (env["PATH"] ?? "").split(path7.delimiter).filter((dir) => dir !== "");
+}
+function othersOnPath(self, env = process.env) {
+  const seen = /* @__PURE__ */ new Set([realpath(self)]);
+  const found = [];
+  for (const dir of pathDirs(env)) {
+    const candidate = path7.join(dir, "bitos");
+    let real;
+    try {
+      if (!fs6.statSync(candidate).isFile()) continue;
+      real = fs6.realpathSync(candidate);
+    } catch {
+      continue;
+    }
+    if (seen.has(real)) continue;
+    seen.add(real);
+    found.push(candidate);
+  }
+  return found;
+}
+function hiddenBy(self, env = process.env) {
+  if (installedWithNpm(self)) return null;
+  const dirs = pathDirs(env);
+  const mine = realpath(path7.dirname(self));
+  const at = dirs.findIndex((dir) => realpath(dir) === mine);
+  if (at === -1) return null;
+  const pathOf = (list) => ({ PATH: list.join(path7.delimiter) });
+  if (othersOnPath(self, pathOf(dirs.slice(0, at))).length > 0) return null;
+  const behind = othersOnPath(self, pathOf(dirs.slice(at + 1)));
+  const npmAt = behind.findIndex(installedWithNpm);
+  const hidden = npmAt === -1 ? behind[0] : behind[npmAt];
+  if (hidden === void 0) return null;
+  return {
+    path: hidden,
+    npm: npmAt !== -1,
+    version: versionOf(hidden)?.version ?? null,
+    remove: npmAt === -1 ? [] : [self, ...behind.slice(0, npmAt)]
+  };
+}
+function shadowNote(self, env = process.env) {
+  if (self === void 0) return null;
+  const hidden = hiddenBy(self, env);
+  if (hidden === null) return null;
+  const version = hidden.version === null ? "" : ` (${hidden.version})`;
+  return hidden.npm ? `the npm install at ${tilde(hidden.path)}${version} is hidden by this copy \u2014 rm ${hidden.remove.map((file) => tilde(file)).join(" ")} to run it` : `another copy at ${tilde(hidden.path)}${version} is hidden by this one`;
 }
 function describeInstall(self, gateway) {
-  const where2 = self === void 0 ? "unknown location" : installedWithNpm(self) ? "npm" : `copy at ${self.replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~")}`;
-  return `bitos ${VERSION} \xB7 build ${BUILD} \xB7 ${where2}${installedWithNpm(self ?? "") ? "" : ` \xB7 updates from ${gateway}`}`;
+  const head = `bitos ${VERSION} \xB7 build ${BUILD}`;
+  if (self === void 0) return `${head} \xB7 unknown location \xB7 updates from ${gateway}`;
+  return installedWithNpm(self) ? `${head} \xB7 npm` : `${head} \xB7 copy at ${tilde(self)} \xB7 updates from ${gateway}`;
 }
 
 // src/sessions.ts
@@ -1048,6 +1133,7 @@ import fs7 from "node:fs";
 import path8 from "node:path";
 var SESSIONS_DIR = path8.join(".bitos", "sessions");
 var MAX_SESSIONS = 30;
+var GIST_CHARS = 48;
 function stamp(d) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
@@ -1105,7 +1191,7 @@ var SessionStore = class {
       } catch {
       }
     }
-    return out2.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return out2.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
   }
   /** The session to continue: the newest one that holds a conversation. */
   latest() {
@@ -1119,9 +1205,9 @@ var SessionStore = class {
     const p = (n) => String(n).padStart(2, "0");
     const time = `${p(when.getHours())}:${p(when.getMinutes())}`;
     const day = sameDay ? "today" : `${when.getFullYear()}-${p(when.getMonth() + 1)}-${p(when.getDate())}`;
-    const first = record.messages.find((m) => m.role === "user")?.content ?? "";
-    const gist = first.replace(/\s+/g, " ").slice(0, 48);
-    return `${day} ${time} \xB7 ${record.turns} turn${record.turns === 1 ? "" : "s"}${gist === "" ? "" : ` \xB7 "${gist}${first.length > 48 ? "\u2026" : ""}"`}`;
+    const first = (record.messages.find((m) => m.role === "user")?.content ?? "").replace(/\s+/g, " ").trim();
+    const gist = first.slice(0, GIST_CHARS);
+    return `${day} ${time} \xB7 ${record.turns} turn${record.turns === 1 ? "" : "s"}${gist === "" ? "" : ` \xB7 "${gist}${first.length > GIST_CHARS ? "\u2026" : ""}"`}`;
   }
   prune() {
     const all = this.list();
@@ -1430,11 +1516,13 @@ async function runRepl() {
   let session = resumed ?? sessions.create(startModel);
   if (resumed !== null) turns = resumed.turns;
   let running = false;
+  const shadow = shadowNote(process.argv[1]);
   process.stdout.write(
     `${banner([
       "",
       `${c.bold("BitOS")}  ${c.dim("one balance \xB7 every web3 intelligence")}`,
       c.dim(describeInstall(process.argv[1], config.gateway)),
+      ...shadow === null ? [] : [c.amber(shadow)],
       c.dim(config.gateway),
       c.dim(address !== null ? `${address.slice(0, 8)}\u2026${address.slice(-6)}` : "anonymous \xB7 dev gateway"),
       c.dim(resumed !== null ? `session ${sessions.label(resumed)} \xB7 /new for a fresh one` : "new session \xB7 kept in .bitos/ as you go"),
@@ -1864,7 +1952,7 @@ async function cmdLogin(args) {
       config.address = poll.address;
       try {
         const minted = await postJson(config, "/api/keys", {
-          name: `bitos cli on ${os7.hostname()}`
+          name: `bitos cli on ${os8.hostname()}`
         });
         if (typeof minted.key === "string") config.apiKey = minted.key;
       } catch {
@@ -2049,7 +2137,7 @@ function cmdInstall(args) {
   const code = fs8.readFileSync(self, "utf8");
   if (!code.startsWith("#!/usr/bin/env node")) fatal("run install from the downloaded bitos script");
   const explicit = args.indexOf("--dir");
-  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path10.join(os7.homedir(), ".local", "bin")];
+  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path10.join(os8.homedir(), ".local", "bin")];
   for (const dir of candidates) {
     try {
       fs8.mkdirSync(dir, { recursive: true });
@@ -2072,6 +2160,11 @@ function cmdInstall(args) {
   }
   fatal("no writable install folder found \u2014 try: bitos install --dir <folder-on-your-PATH>");
 }
+function cmdVersion() {
+  out(describeInstall(process.argv[1], loadConfig().gateway));
+  const shadow = shadowNote(process.argv[1]);
+  if (shadow !== null) out(shadow);
+}
 async function cmdUpdate() {
   const self = process.argv[1] ?? fatal("cannot locate this binary");
   if (installedWithNpm(self)) {
@@ -2079,6 +2172,8 @@ async function cmdUpdate() {
     out(`  npm i -g ${NPM_PACKAGE}@latest`);
     return;
   }
+  if (hiddenBy(self)?.npm === true) fatal(`${shadowNote(self)}
+nothing updated: npm keeps that one current, and this copy would still run first`);
   const config = loadConfig();
   const res = await fetch(`${config.gateway}/download/bitos.mjs`, {
     headers: config.betaPassword !== void 0 ? { "x-beta-password": config.betaPassword } : {}
@@ -2115,7 +2210,7 @@ async function main() {
       case "version":
       case "--version":
       case "-v":
-        return out(describeInstall(process.argv[1], loadConfig().gateway));
+        return cmdVersion();
       case "install":
         return cmdInstall(args);
       case "update":
@@ -2153,3 +2248,4 @@ async function main() {
   }
 }
 void main();
+// bitos 0.1.4 build 2026-09-22
