@@ -3,13 +3,17 @@
 // src/main.ts
 import fs6 from "node:fs";
 import os7 from "node:os";
-import path7 from "node:path";
+import path8 from "node:path";
 import { spawn } from "node:child_process";
 
 // src/config.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+var AUTO_MODEL = "bitos/code";
+function isModelId(value) {
+  return /^bitos\/(auto|chat|code)$/.test(value) || /^[a-z0-9][a-z0-9-]*::.+$/.test(value);
+}
 var DEFAULT_GATEWAY = "https://bitos.dev";
 function configDir() {
   const base = process.env["XDG_CONFIG_HOME"] ?? path.join(os.homedir(), ".config");
@@ -24,7 +28,8 @@ function loadConfig() {
       ...typeof raw.token === "string" ? { token: raw.token } : {},
       ...typeof raw.address === "string" ? { address: raw.address } : {},
       ...typeof raw.apiKey === "string" ? { apiKey: raw.apiKey } : {},
-      ...typeof raw.betaPassword === "string" ? { betaPassword: raw.betaPassword } : {}
+      ...typeof raw.betaPassword === "string" ? { betaPassword: raw.betaPassword } : {},
+      ...typeof raw.model === "string" && isModelId(raw.model) ? { model: raw.model } : {}
     };
   } catch {
     return { gateway: DEFAULT_GATEWAY };
@@ -69,13 +74,13 @@ async function fail(res) {
   }
   throw new GatewayError(detail !== "" ? detail : `HTTP ${res.status}`, res.status);
 }
-async function getJson(config, path8) {
-  const res = await fetch(`${config.gateway}${path8}`, { headers: headers(config) });
+async function getJson(config, path9) {
+  const res = await fetch(`${config.gateway}${path9}`, { headers: headers(config) });
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function postJson(config, path8, body) {
-  const res = await fetch(`${config.gateway}${path8}`, {
+async function postJson(config, path9, body) {
+  const res = await fetch(`${config.gateway}${path9}`, {
     method: "POST",
     headers: headers(config, { "content-type": "application/json" }),
     body: JSON.stringify(body)
@@ -83,8 +88,8 @@ async function postJson(config, path8, body) {
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function postBytes(config, path8, bytes, extra) {
-  const res = await fetch(`${config.gateway}${path8}`, {
+async function postBytes(config, path9, bytes, extra) {
+  const res = await fetch(`${config.gateway}${path9}`, {
     method: "POST",
     headers: headers(config, { "content-type": "application/octet-stream", ...extra }),
     body: bytes
@@ -92,13 +97,13 @@ async function postBytes(config, path8, bytes, extra) {
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function getBytes(config, path8) {
-  const res = await fetch(`${config.gateway}${path8}`, { headers: headers(config) });
+async function getBytes(config, path9) {
+  const res = await fetch(`${config.gateway}${path9}`, { headers: headers(config) });
   if (!res.ok) await fail(res);
   return new Uint8Array(await res.arrayBuffer());
 }
-async function del(config, path8) {
-  const res = await fetch(`${config.gateway}${path8}`, {
+async function del(config, path9) {
+  const res = await fetch(`${config.gateway}${path9}`, {
     method: "DELETE",
     headers: headers(config)
   });
@@ -155,10 +160,8 @@ async function streamTask(config, body, handlers = {}) {
 }
 
 // src/repl.ts
+import path7 from "node:path";
 import readline from "node:readline";
-
-// src/agent.ts
-import os6 from "node:os";
 
 // ../../packages/agent/src/tools.ts
 import fs2 from "node:fs";
@@ -435,6 +438,9 @@ import path4 from "node:path";
 var SKILL_FILE = "SKILL.md";
 var PROJECT_SKILL_DIRS = [".bitos/skills", ".claude/skills", ".agents/skills"];
 var MAX_SKILL_CHARS = 24e3;
+var LISTED_DESCRIPTION = 120;
+var LISTED_PERSONAL = 40;
+var SKILL_LIST = "list";
 function personalSkillDirs(home = os4.homedir(), env = process.env) {
   const config = env["XDG_CONFIG_HOME"] ?? path4.join(home, ".config");
   return [path4.join(config, "bitos", "skills"), path4.join(home, ".claude", "skills"), path4.join(home, ".agents", "skills")];
@@ -459,7 +465,7 @@ function parseSkillHeader(text) {
   const description = fields.get("description") ?? "";
   return name === "" || description === "" ? null : { name, description };
 }
-function readDir(dir) {
+function readDir(dir, scope) {
   let names;
   try {
     names = fs4.readdirSync(dir);
@@ -476,7 +482,7 @@ function readDir(dir) {
       continue;
     }
     const header = parseSkillHeader(text);
-    if (header !== null && header.name === name) out2.push({ name, description: header.description.replace(/\s+/g, " "), file });
+    if (header !== null && header.name === name) out2.push({ name, description: header.description.replace(/\s+/g, " "), file, scope });
   }
   return out2;
 }
@@ -487,32 +493,48 @@ function discoverSkills(cwd, home = os4.homedir(), env = process.env) {
   };
   let dir = path4.resolve(cwd);
   for (; ; ) {
-    for (const sub of PROJECT_SKILL_DIRS) take(readDir(path4.join(dir, sub)));
+    for (const sub of PROJECT_SKILL_DIRS) take(readDir(path4.join(dir, sub), "project"));
     const atRepoRoot = fs4.existsSync(path4.join(dir, ".git"));
     const parent = path4.dirname(dir);
     if (atRepoRoot || parent === dir) break;
     dir = parent;
   }
-  for (const d of personalSkillDirs(home, env)) take(readDir(d));
+  for (const d of personalSkillDirs(home, env)) take(readDir(d, "personal"));
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+var clipDescription = (s) => s.length > LISTED_DESCRIPTION ? `${s.slice(0, LISTED_DESCRIPTION - 1)}\u2026` : s;
+function skillListing(skills, full = false) {
+  const project = skills.filter((s) => s.scope === "project");
+  const personal = skills.filter((s) => s.scope === "personal");
+  const lines = project.map((s) => `- ${s.name}: ${clipDescription(s.description)}`);
+  if (personal.length > 0) {
+    if (full) lines.push(...personal.map((s) => `- ${s.name}: ${clipDescription(s.description)}`));
+    else {
+      const named = personal.slice(0, LISTED_PERSONAL).map((s) => s.name).join(", ");
+      const more = personal.length > LISTED_PERSONAL ? ` \u2026 and ${personal.length - LISTED_PERSONAL} more` : "";
+      lines.push(`Personal skills, by name (load "${SKILL_LIST}" for their descriptions): ${named}${more}`);
+    }
+  }
+  return lines.join("\n");
 }
 function skillTool(skills) {
   if (skills.length === 0) return null;
-  const listing = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
   return {
     name: "skill",
     description: `Load one of the skills available here \u2014 a method or checklist written for this kind of task. Call it before starting work the skill covers; its text comes back for you to follow.
 
 Available skills:
-${listing}`,
+${skillListing(skills)}`,
     parameters: {
       type: "object",
-      properties: { name: { type: "string", description: "The skill to load, from the list." } },
+      properties: { name: { type: "string", description: `The skill to load, from the list; "${SKILL_LIST}" shows every skill with its description.` } },
       required: ["name"]
     },
     mutating: false,
     run: async (args) => {
       const name = typeof args["name"] === "string" ? args["name"].trim() : "";
+      if (name === SKILL_LIST) return clip(`Skills available here:
+${skillListing(skills, true)}`, MAX_SKILL_CHARS);
       const found = skills.find((s) => s.name === name);
       if (found === void 0) return `No skill named '${name}'. Available: ${skills.map((s) => s.name).join(", ")}`;
       const text = fs4.readFileSync(found.file, "utf8");
@@ -537,21 +559,42 @@ var AgentError = class extends Error {
 };
 var REPEAT_LIMIT = 3;
 var REPEAT_REFUSED = "REFUSED: the same call three times in a row. Change your approach, or ask the user what they want.";
-function defaultSystemPrompt(cwd) {
-  let git = "";
+var SNAPSHOT_ENTRIES = 40;
+function gitBranch(cwd) {
   try {
-    if (fs5.existsSync(path5.join(cwd, ".git"))) git = " This directory is a git repository.";
+    const head = fs5.readFileSync(path5.join(cwd, ".git", "HEAD"), "utf8").trim();
+    const m = /^ref: refs\/heads\/(.+)$/.exec(head);
+    return m === null ? head.slice(0, 12) : m[1];
   } catch {
+    return null;
   }
+}
+function projectSnapshot(cwd) {
+  let entries = [];
+  try {
+    entries = fs5.readdirSync(cwd, { withFileTypes: true }).filter((e) => e.name !== "node_modules" && e.name !== ".git").map((e) => e.isDirectory() ? `${e.name}/` : e.name).sort();
+  } catch {
+    return "";
+  }
+  const branch = gitBranch(cwd);
+  const shown2 = entries.slice(0, SNAPSHOT_ENTRIES).join("  ");
+  const more = entries.length > SNAPSHOT_ENTRIES ? ` \u2026 and ${entries.length - SNAPSHOT_ENTRIES} more` : "";
+  return `${branch === null ? "Not a git checkout." : `Git branch: ${branch}.`} Top level: ${shown2 === "" ? "(empty)" : shown2}${more}`;
+}
+function defaultSystemPrompt(cwd) {
   return [
-    "You are bitos, a coding and operations assistant running in the user's terminal, with inference from decentralized web3 networks.",
-    `Working directory: ${cwd}.${git} Home: ${os5.homedir()}. Platform: ${os5.platform()} ${os5.arch()}.`,
+    "You are bitos, a coding agent running in the user's terminal, with inference from decentralized web3 networks.",
+    `Working directory: ${cwd}. Home: ${os5.homedir()}. Platform: ${os5.platform()} ${os5.arch()}.`,
+    projectSnapshot(cwd),
     "You have tools to read, search, edit and write files and to run shell commands ANYWHERE on this",
     "machine: relative paths hang off the working directory, absolute paths and ~ reach the rest.",
     "Prefer the working directory unless the user points elsewhere or the task clearly lives elsewhere.",
-    "Work like a careful engineer: look before you change (read_file/search first), make minimal",
-    "edits with edit_file, verify with run_command (tests, typecheck, git diff), and report what you",
-    "actually did. Never invent file contents or command output \u2014 call the tool.",
+    "Act, do not narrate: when the request is about this project, look first (list_dir, read_file,",
+    "search) and then do the work; when asked to build or fix something, state the plan in one line,",
+    "make the edits with edit_file or write_file, run the relevant checks with run_command (tests,",
+    "typecheck, git diff) and report what you actually did, with file paths. Ask a question only",
+    "when the request is genuinely ambiguous, and then ask one precise question, not a menu.",
+    "Never invent file contents or command output \u2014 call the tool.",
     "When the user declines a tool call, stop and ask; do not try the same thing another way.",
     "Answer in the user's language. Be concise; put code in fenced blocks."
   ].join(" ");
@@ -586,6 +629,7 @@ var Agent = class {
     const loader = skillTool(skills);
     this.tools = [...options.tools ?? LOCAL_TOOLS, ...loader === null ? [] : [loader]];
     this.model = options.model ?? "bitos/code";
+    this.lane = options.lane;
     this.maxRounds = options.maxRounds ?? MAX_ROUNDS;
     const rules = options.rules === void 0 ? loadRules(ctx.cwd) : options.rules;
     const block = rules === null ? "" : rulesBlock(rules);
@@ -597,12 +641,23 @@ ${block}` }];
   messages;
   tools;
   model;
+  lane;
   maxRounds;
   /** Cost across the session, from the gateway's usage (estimates when absent). */
   totalUsd = 0;
+  /** Tokens across the session, as the gateway counted them. */
+  totalTokens = { input: 0, output: 0 };
   /** The tools the model is offered, the skill loader included when there are skills. */
   get toolNames() {
     return this.tools.map((t) => t.name);
+  }
+  /** The model on the wire: a routed `bitos/*` id or a pinned `provider::model`. */
+  get currentModel() {
+    return this.model;
+  }
+  /** Switch models mid-session; the conversation carries on. */
+  setModel(model) {
+    this.model = model;
   }
   reset() {
     this.messages.length = 1;
@@ -627,15 +682,20 @@ ${block}` }];
   /** One user turn: loops through tool calls until the model answers in prose. */
   async turn(input) {
     this.messages.push({ role: "user", content: input });
+    const usdBefore = this.totalUsd;
+    const tokensBefore = { ...this.totalTokens };
+    const done = (text, rounds2, toolCalls2) => ({
+      text,
+      rounds: rounds2,
+      toolCalls: toolCalls2,
+      usd: this.totalUsd - usdBefore,
+      tokens: { input: this.totalTokens.input - tokensBefore.input, output: this.totalTokens.output - tokensBefore.output }
+    });
     let rounds = 0;
     let toolCalls = 0;
     for (; ; ) {
       if (rounds >= this.maxRounds) {
-        return {
-          text: `Stopped after ${this.maxRounds} rounds without a final answer \u2014 tell me how to continue.`,
-          rounds,
-          toolCalls
-        };
+        return done(`Stopped after ${this.maxRounds} rounds without a final answer \u2014 tell me how to continue.`, rounds, toolCalls);
       }
       rounds++;
       this.events.onThinking();
@@ -643,7 +703,7 @@ ${block}` }];
       const calls = reply.tool_calls ?? [];
       this.messages.push({ role: "assistant", content: reply.content, ...calls.length > 0 ? { tool_calls: calls } : {} });
       if (calls.length === 0) {
-        return { text: reply.content ?? "", rounds, toolCalls };
+        return done(reply.content ?? "", rounds, toolCalls);
       }
       for (const call of calls) {
         toolCalls++;
@@ -673,7 +733,8 @@ ${block}` }];
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${key}`,
-        ...this.transport.betaPassword !== void 0 ? { "x-beta-password": this.transport.betaPassword } : {}
+        ...this.transport.betaPassword !== void 0 ? { "x-beta-password": this.transport.betaPassword } : {},
+        ...this.lane !== void 0 ? { "x-bitos-lane": this.lane } : {}
       },
       body: JSON.stringify({
         model: this.model,
@@ -703,12 +764,18 @@ ${block}` }];
     const latency = Number(h("x-bitos-latency-ms"));
     const usd = Number(h("x-bitos-usd"));
     if (Number.isFinite(usd)) this.totalUsd += usd;
+    const tokens = json.usage === void 0 ? void 0 : { input: Math.max(0, json.usage.prompt_tokens ?? 0), output: Math.max(0, json.usage.completion_tokens ?? 0) };
+    if (tokens !== void 0) {
+      this.totalTokens.input += tokens.input;
+      this.totalTokens.output += tokens.output;
+    }
     this.events.onRoute({
       ...h("x-bitos-lane") !== void 0 ? { lane: h("x-bitos-lane") } : {},
       ...h("x-bitos-provider") !== void 0 ? { provider: h("x-bitos-provider") } : {},
       ...h("x-bitos-model") !== void 0 ? { model: h("x-bitos-model") } : {},
       ...Number.isFinite(latency) ? { latencyMs: latency } : {},
-      ...Number.isFinite(usd) ? { usd } : {}
+      ...Number.isFinite(usd) ? { usd } : {},
+      ...tokens !== void 0 ? { tokens } : {}
     });
     return message;
   }
@@ -877,6 +944,7 @@ function defaultTools(env = process.env) {
 }
 
 // src/agent.ts
+import os6 from "node:os";
 async function authorization(config) {
   if (config.apiKey !== void 0) return config.apiKey;
   if (config.token === void 0) {
@@ -898,8 +966,8 @@ function transportFor(config) {
   };
 }
 var Agent2 = class extends Agent {
-  constructor(config, ctx, events, model = "bitos/code") {
-    super(transportFor(config), ctx, events, { model, tools: defaultTools() });
+  constructor(config, ctx, events, model = config.model ?? AUTO_MODEL) {
+    super(transportFor(config), ctx, events, { model, tools: defaultTools(), lane: "code" });
   }
   async turn(input) {
     try {
@@ -1112,14 +1180,23 @@ var REPL_HELP = `${c.bold("bitos console")} \u2014 an agent in this directory.
   here and run commands. Reads just happen; writes and commands ask first \u2014
   answer y / n, or a (always, for this session).
 
+  /model [id|auto] pin a model (provider::model, see /models) or let the brain route
+  /models          the models you can pin, from every network
+  /usage           this session's tokens and cost
   /agent           agent mode (tools, this directory)
   /chat            plain mode: one task per line on the brain, no tools
   /lane <name>     in chat mode, pin the lane (${LANES.join(", ")})
   /yes             stop asking for permission this session
   /new             forget the conversation so far
   /whoami          the signed-in address
-  /help            this list
+  /help            this list (a bare "help" works too)
   /exit            leave (Ctrl-D works too)`;
+function fmtTokens(n) {
+  return n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+}
+function modelLabel(model) {
+  return model === AUTO_MODEL ? "auto \xB7 routed by the brain, code lane" : model;
+}
 function fmtStep(step) {
   const who = step.model !== void 0 ? `${step.provider} \xB7 ${step.model}` : step.provider;
   const secs = `${(step.latencyMs / 1e3).toFixed(1)}s`;
@@ -1161,18 +1238,26 @@ async function runRepl() {
   let threadId = await newThread(config);
   let exiting = false;
   let inputDone = false;
+  const cwd = process.cwd();
+  const branch = gitBranch(cwd);
+  const rules = loadRules(cwd);
+  const skills = discoverSkills(cwd);
+  const startModel = process.env["BITOS_MODEL"] ?? config.model ?? AUTO_MODEL;
+  let turns = 0;
   process.stdout.write(
     `${banner([
-      "",
       "",
       `${c.bold("BitOS")}  ${c.dim("one balance \xB7 every web3 intelligence")}`,
       "",
       c.dim(config.gateway),
       c.dim(address !== null ? `${address.slice(0, 8)}\u2026${address.slice(-6)}` : "anonymous \xB7 dev gateway"),
       "",
-      c.dim(`agent in ${process.cwd()}`),
-      c.dim("/help for commands \xB7 /exit to leave"),
-      ""
+      c.dim(`agent in ${cwd}${branch !== null ? ` \xB7 ${branch}` : ""}`),
+      c.dim(`model ${modelLabel(startModel)}`),
+      c.dim(
+        `${rules.project !== null ? path7.basename(rules.project.path) : "no AGENTS.md"} \xB7 ${skills.length} skill${skills.length === 1 ? "" : "s"} on this machine`
+      ),
+      c.dim("/help for commands \xB7 /exit to leave")
     ])}
 
 `
@@ -1218,10 +1303,15 @@ ${c.amber("?")} ${c.bold(tool)}  ${summary}`);
       const first = result.split("\n")[0].slice(0, 90);
       live.print(c.dim(`    \u21B3 ${first}${result.includes("\n") ? " \u2026" : ""} (${ms}ms)`));
     }
-  });
+  }, startModel);
   const handle = async (line) => {
     const text = line.trim();
     if (text === "") return;
+    if (text === "help" || text === "?") {
+      process.stdout.write(`${REPL_HELP}
+`);
+      return;
+    }
     if (text.startsWith("/")) {
       const [cmd, ...rest] = text.slice(1).split(/\s+/);
       switch (cmd) {
@@ -1233,6 +1323,51 @@ ${c.amber("?")} ${c.bold(tool)}  ${summary}`);
         case "help":
           process.stdout.write(`${REPL_HELP}
 `);
+          return;
+        case "model": {
+          const want = rest[0];
+          if (want === void 0) {
+            process.stdout.write(c.dim(`model: ${modelLabel(agent.currentModel)}
+`));
+            return;
+          }
+          const next = want === "auto" ? AUTO_MODEL : want;
+          if (!isModelId(next)) {
+            process.stdout.write(`${c.red("usage:")} /model auto | provider::model \u2014 see /models
+`);
+            return;
+          }
+          agent.setModel(next);
+          if (next === AUTO_MODEL) delete config.model;
+          else config.model = next;
+          saveConfig(config);
+          process.stdout.write(c.dim(`model: ${modelLabel(next)} \u2014 saved for next time too
+`));
+          return;
+        }
+        case "models": {
+          try {
+            const catalog = await getJson(config, "/api/models");
+            const current = agent.currentModel;
+            const mark = (id) => id === current ? c.amber("\u25CF") : c.dim("\u25CB");
+            const lines = [`  ${mark(AUTO_MODEL)} auto  ${c.dim("routed by the brain, code lane")}`];
+            for (const p of catalog.providers) {
+              for (const m of p.models) lines.push(`  ${mark(`${p.id}::${m}`)} ${p.id}::${m}`);
+            }
+            process.stdout.write(`${lines.join("\n")}
+${c.dim("  /model <id> to pin one \xB7 /model auto to let the brain route")}
+`);
+          } catch (err) {
+            process.stdout.write(`${c.red("\u2717")} ${err instanceof Error ? err.message : String(err)}
+`);
+          }
+          return;
+        }
+        case "usage":
+          process.stdout.write(
+            `${c.dim(`session: $${agent.totalUsd.toFixed(4)} \xB7 ${fmtTokens(agent.totalTokens.input)} in \xB7 ${fmtTokens(agent.totalTokens.output)} out \xB7 ${turns} turn${turns === 1 ? "" : "s"} \xB7 model ${modelLabel(agent.currentModel)}`)}
+`
+          );
           return;
         case "lane": {
           const want = rest[0];
@@ -1280,8 +1415,10 @@ ${c.amber("?")} ${c.bold(tool)}  ${summary}`);
       live.start();
       try {
         const done = await agent.turn(text);
+        turns++;
+        live.learn({ usd: done.usd });
         const receipt = live.finish(
-          ` \xB7 ${done.rounds} round${done.rounds > 1 ? "s" : ""}${done.toolCalls > 0 ? ` \xB7 ${done.toolCalls} tool call${done.toolCalls > 1 ? "s" : ""}` : ""} \xB7 ${((Date.now() - started) / 1e3).toFixed(1)}s total`
+          ` \xB7 ${fmtTokens(done.tokens.input)} in \xB7 ${fmtTokens(done.tokens.output)} out \xB7 ${done.rounds} round${done.rounds > 1 ? "s" : ""}${done.toolCalls > 0 ? ` \xB7 ${done.toolCalls} tool call${done.toolCalls > 1 ? "s" : ""}` : ""} \xB7 ${((Date.now() - started) / 1e3).toFixed(1)}s total`
         );
         process.stdout.write(`
 ${renderMarkdown(done.text)}
@@ -1392,10 +1529,12 @@ var NPM_PACKAGE = "bitos-cli";
 var HELP = `bitos \u2014 every web3 intelligence, one command away.
 
 USAGE
-  bitos                     Open the console: a conversation in your terminal
+  bitos                     Open the console: an agent in this folder
+  bitos --model <id>        The console on a pinned model (provider::model, or auto)
   bitos <command> [args]
 
 COMMANDS
+  models                    The models you can pin, from every network
   login [--gateway <url>]   Sign in with your wallet, via your browser
   logout                    Drop the saved session
   whoami                    The signed-in address and balance
@@ -1406,7 +1545,7 @@ COMMANDS
   files cat <name|id>       Print a text file (a memory note, say)
   files rm <name|id>        Delete one file
   status                    Gateway health at a glance
-  config set <k> <v>        Set gateway | beta-password
+  config set <k> <v>        Set gateway | beta-password | model (provider::model, or auto)
   install                   Put bitos on your PATH (~/.local/bin) so it runs anywhere
   update                    Replace this binary with the gateway's latest (npm installs: npm i -g bitos-cli@latest)
   version                   Print the version
@@ -1532,13 +1671,13 @@ function fmtBytes(n) {
 }
 function walk(root, base) {
   const stat = fs6.statSync(root);
-  if (stat.isFile()) return [{ abs: root, dir: base, name: path7.basename(root) }];
+  if (stat.isFile()) return [{ abs: root, dir: base, name: path8.basename(root) }];
   if (!stat.isDirectory()) return [];
-  const folder = base === "" ? path7.basename(root) : `${base}/${path7.basename(root)}`;
+  const folder = base === "" ? path8.basename(root) : `${base}/${path8.basename(root)}`;
   const found = [];
   for (const entry of fs6.readdirSync(root)) {
     if (entry.startsWith(".")) continue;
-    found.push(...walk(path7.join(root, entry), folder));
+    found.push(...walk(path8.join(root, entry), folder));
   }
   return found;
 }
@@ -1562,7 +1701,7 @@ async function cmdFiles(args) {
     if (targets.length === 0) fatal("usage: bitos files put <file-or-folder\u2026>");
     for (const target of targets) {
       if (!fs6.existsSync(target)) fatal(`no such path: ${target}`);
-      for (const f of walk(path7.resolve(target), "")) {
+      for (const f of walk(path8.resolve(target), "")) {
         const bytes = fs6.readFileSync(f.abs);
         await postBytes(config, "/api/files", new Uint8Array(bytes), {
           "x-file-name": encodeURIComponent(f.name),
@@ -1615,7 +1754,11 @@ function cmdConfig(args) {
   const config = loadConfig();
   if (k === "gateway") config.gateway = v.replace(/\/$/, "");
   else if (k === "beta-password") config.betaPassword = v;
-  else fatal(`unknown config key '${k}'`);
+  else if (k === "model") {
+    if (v === "auto") delete config.model;
+    else if (isModelId(v)) config.model = v;
+    else fatal(`not a model id: '${v}' \u2014 provider::model (see: bitos models) or auto`);
+  } else fatal(`unknown config key '${k}'`);
   saveConfig(config);
   out("saved");
 }
@@ -1625,7 +1768,20 @@ function installedWithNpm(self) {
     real = fs6.realpathSync(self);
   } catch {
   }
-  return real.split(path7.sep).includes("node_modules");
+  return real.split(path8.sep).includes("node_modules");
+}
+async function cmdModels() {
+  const config = loadConfig();
+  const catalog = await getJson(config, "/api/models");
+  const current = config.model ?? AUTO_MODEL;
+  out(`${current === AUTO_MODEL ? "\u25CF" : "\u25CB"} auto  (routed by the brain, code lane)`);
+  for (const p of catalog.providers) {
+    for (const m of p.models) {
+      const id = `${p.id}::${m}`;
+      out(`${id === current ? "\u25CF" : "\u25CB"} ${id}`);
+    }
+  }
+  out("\npin one: bitos config set model <id>   \xB7   one run: bitos --model <id>   \xB7   back: bitos config set model auto");
 }
 function cmdInstall(args) {
   const self = process.argv[1] ?? fatal("cannot locate this binary");
@@ -1636,7 +1792,7 @@ function cmdInstall(args) {
   const code = fs6.readFileSync(self, "utf8");
   if (!code.startsWith("#!/usr/bin/env node")) fatal("run install from the downloaded bitos script");
   const explicit = args.indexOf("--dir");
-  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path7.join(os7.homedir(), ".local", "bin")];
+  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path8.join(os7.homedir(), ".local", "bin")];
   for (const dir of candidates) {
     try {
       fs6.mkdirSync(dir, { recursive: true });
@@ -1644,10 +1800,10 @@ function cmdInstall(args) {
     } catch {
       continue;
     }
-    const dest = path7.join(dir, "bitos");
+    const dest = path8.join(dir, "bitos");
     fs6.writeFileSync(dest, code, { mode: 493 });
     out(`installed ${dest}`);
-    const onPath = (process.env["PATH"] ?? "").split(path7.delimiter).includes(dir);
+    const onPath = (process.env["PATH"] ?? "").split(path8.delimiter).includes(dir);
     if (!onPath) {
       const rc = (process.env["SHELL"] ?? "").endsWith("zsh") ? "~/.zshrc" : "~/.bashrc";
       out(`${dir} is not on your PATH yet \u2014 add this line to ${rc}, then open a new terminal:`);
@@ -1680,6 +1836,18 @@ async function main() {
   const major = Number(process.versions.node.split(".")[0]);
   if (major < 20) fatal(`Node ${process.versions.node} is too old \u2014 bitos needs Node 20 or newer`);
   const argv = process.argv.slice(2).filter((a) => a !== "--yes");
+  const modelFlag = argv.indexOf("--model");
+  if (modelFlag !== -1) {
+    const want = argv[modelFlag + 1] ?? fatal("--model needs an id \u2014 see: bitos models");
+    const model = want === "auto" ? AUTO_MODEL : want;
+    if (!isModelId(model)) fatal(`not a model id: '${want}' \u2014 provider::model (see: bitos models) or auto`);
+    process.env["BITOS_MODEL"] = model;
+    argv.splice(modelFlag, 2);
+  }
+  if (argv[0] === "models") {
+    await cmdModels();
+    return;
+  }
   const [cmd, ...args] = argv;
   try {
     switch (cmd) {
@@ -1690,7 +1858,7 @@ async function main() {
       case "version":
       case "--version":
       case "-v":
-        return out(`bitos ${"0.1.0"}`);
+        return out(`bitos ${"0.1.1"}`);
       case "install":
         return cmdInstall(args);
       case "update":

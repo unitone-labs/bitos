@@ -49,10 +49,29 @@ What the agent knows about your project:
 - **No loops.** The same call three times running is stopped and you are
   asked.
 
+## Models and cost
+
+By default the brain routes every call (`auto`: the code lane, the best
+network for it). Pin a model instead — any `provider::model` the gateway
+runs, listed by `/models` in the console or `bitos models` outside it:
+
+```
+/models                                   what you can pin, ● marks the current one
+/model chutes::deepseek-ai/DeepSeek-V3.2  pin it, for this session and the next
+/model auto                               back to the brain
+bitos --model gm::gpt-5.4 …               one run on a pinned model
+bitos config set model <id|auto>          the saved default
+```
+
+Every turn's receipt shows what it cost and how many tokens went in and
+out; `/usage` totals the session. The banner says which folder, branch,
+model, rules file (`AGENTS.md`) and skills the agent starts with.
+
 The loop lives in the terminal, not on the gateway: it speaks OpenAI-style
-tool calling to `/v1/chat/completions` (model `bitos/code`), so the tools
-run against YOUR files and shell while inference comes from web3 networks.
-Login mints the personal API key that transport needs.
+tool calling to `/v1/chat/completions` (model `bitos/code`, or a pinned
+`provider::model`), so the tools run against YOUR files and shell while
+inference comes from web3 networks. Login mints the personal API key that
+transport needs.
 
 `/chat` switches to the plain mode (one task per line on the brain, no
 tools, `/lane` pins a lane); `/agent` switches back. `/new` forgets the
