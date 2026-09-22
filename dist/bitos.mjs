@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/main.ts
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 import os7 from "node:os";
-import path8 from "node:path";
+import path9 from "node:path";
 import { spawn } from "node:child_process";
 
 // src/config.ts
@@ -74,13 +74,13 @@ async function fail(res) {
   }
   throw new GatewayError(detail !== "" ? detail : `HTTP ${res.status}`, res.status);
 }
-async function getJson(config, path9) {
-  const res = await fetch(`${config.gateway}${path9}`, { headers: headers(config) });
+async function getJson(config, path10) {
+  const res = await fetch(`${config.gateway}${path10}`, { headers: headers(config) });
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function postJson(config, path9, body) {
-  const res = await fetch(`${config.gateway}${path9}`, {
+async function postJson(config, path10, body) {
+  const res = await fetch(`${config.gateway}${path10}`, {
     method: "POST",
     headers: headers(config, { "content-type": "application/json" }),
     body: JSON.stringify(body)
@@ -88,8 +88,8 @@ async function postJson(config, path9, body) {
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function postBytes(config, path9, bytes, extra) {
-  const res = await fetch(`${config.gateway}${path9}`, {
+async function postBytes(config, path10, bytes, extra) {
+  const res = await fetch(`${config.gateway}${path10}`, {
     method: "POST",
     headers: headers(config, { "content-type": "application/octet-stream", ...extra }),
     body: bytes
@@ -97,13 +97,13 @@ async function postBytes(config, path9, bytes, extra) {
   if (!res.ok) await fail(res);
   return await res.json();
 }
-async function getBytes(config, path9) {
-  const res = await fetch(`${config.gateway}${path9}`, { headers: headers(config) });
+async function getBytes(config, path10) {
+  const res = await fetch(`${config.gateway}${path10}`, { headers: headers(config) });
   if (!res.ok) await fail(res);
   return new Uint8Array(await res.arrayBuffer());
 }
-async function del(config, path9) {
-  const res = await fetch(`${config.gateway}${path9}`, {
+async function del(config, path10) {
+  const res = await fetch(`${config.gateway}${path10}`, {
     method: "DELETE",
     headers: headers(config)
   });
@@ -160,7 +160,7 @@ async function streamTask(config, body, handlers = {}) {
 }
 
 // src/repl.ts
-import path7 from "node:path";
+import path8 from "node:path";
 import readline from "node:readline";
 
 // ../../packages/agent/src/tools.ts
@@ -979,6 +979,24 @@ var Agent2 = class extends Agent {
   }
 };
 
+// src/install.ts
+import fs6 from "node:fs";
+import path7 from "node:path";
+var VERSION = true ? "0.1.2" : "dev";
+var BUILD = true ? "2026-09-22" : "unbundled";
+function installedWithNpm(self) {
+  let real = self;
+  try {
+    real = fs6.realpathSync(self);
+  } catch {
+  }
+  return real.split(path7.sep).includes("node_modules");
+}
+function describeInstall(self, gateway) {
+  const where2 = self === void 0 ? "unknown location" : installedWithNpm(self) ? "npm" : `copy at ${self.replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~")}`;
+  return `bitos ${VERSION} \xB7 build ${BUILD} \xB7 ${where2}${installedWithNpm(self ?? "") ? "" : ` \xB7 updates from ${gateway}`}`;
+}
+
 // src/ui.ts
 var isTTY = process.stdout.isTTY === true;
 var esc = (code, s) => isTTY ? `\x1B[${code}m${s}\x1B[0m` : s;
@@ -1248,14 +1266,14 @@ async function runRepl() {
     `${banner([
       "",
       `${c.bold("BitOS")}  ${c.dim("one balance \xB7 every web3 intelligence")}`,
-      "",
+      c.dim(describeInstall(process.argv[1], config.gateway)),
       c.dim(config.gateway),
       c.dim(address !== null ? `${address.slice(0, 8)}\u2026${address.slice(-6)}` : "anonymous \xB7 dev gateway"),
       "",
       c.dim(`agent in ${cwd}${branch !== null ? ` \xB7 ${branch}` : ""}`),
       c.dim(`model ${modelLabel(startModel)}`),
       c.dim(
-        `${rules.project !== null ? path7.basename(rules.project.path) : "no AGENTS.md"} \xB7 ${skills.length} skill${skills.length === 1 ? "" : "s"} on this machine`
+        `${rules.project !== null ? path8.basename(rules.project.path) : "no AGENTS.md"} \xB7 ${skills.length} skill${skills.length === 1 ? "" : "s"} on this machine`
       ),
       c.dim("/help for commands \xB7 /exit to leave")
     ])}
@@ -1670,14 +1688,14 @@ function fmtBytes(n) {
   return n < 1024 * 1024 ? `${(n / 1024).toFixed(1)}K` : `${(n / (1024 * 1024)).toFixed(1)}M`;
 }
 function walk(root, base) {
-  const stat = fs6.statSync(root);
-  if (stat.isFile()) return [{ abs: root, dir: base, name: path8.basename(root) }];
+  const stat = fs7.statSync(root);
+  if (stat.isFile()) return [{ abs: root, dir: base, name: path9.basename(root) }];
   if (!stat.isDirectory()) return [];
-  const folder = base === "" ? path8.basename(root) : `${base}/${path8.basename(root)}`;
+  const folder = base === "" ? path9.basename(root) : `${base}/${path9.basename(root)}`;
   const found = [];
-  for (const entry of fs6.readdirSync(root)) {
+  for (const entry of fs7.readdirSync(root)) {
     if (entry.startsWith(".")) continue;
-    found.push(...walk(path8.join(root, entry), folder));
+    found.push(...walk(path9.join(root, entry), folder));
   }
   return found;
 }
@@ -1700,9 +1718,9 @@ async function cmdFiles(args) {
     const targets = args.slice(1);
     if (targets.length === 0) fatal("usage: bitos files put <file-or-folder\u2026>");
     for (const target of targets) {
-      if (!fs6.existsSync(target)) fatal(`no such path: ${target}`);
-      for (const f of walk(path8.resolve(target), "")) {
-        const bytes = fs6.readFileSync(f.abs);
+      if (!fs7.existsSync(target)) fatal(`no such path: ${target}`);
+      for (const f of walk(path9.resolve(target), "")) {
+        const bytes = fs7.readFileSync(f.abs);
         await postBytes(config, "/api/files", new Uint8Array(bytes), {
           "x-file-name": encodeURIComponent(f.name),
           ...f.dir !== "" ? { "x-file-dir": encodeURIComponent(f.dir) } : {}
@@ -1722,7 +1740,7 @@ async function cmdFiles(args) {
     }
     const oFlag = args.indexOf("-o");
     const dest = oFlag !== -1 ? args[oFlag + 1] ?? fatal("-o needs a path") : row.name;
-    fs6.writeFileSync(dest, bytes);
+    fs7.writeFileSync(dest, bytes);
     out(`\u2193 ${dest} (${fmtBytes(bytes.length)})`);
     return;
   }
@@ -1762,14 +1780,6 @@ function cmdConfig(args) {
   saveConfig(config);
   out("saved");
 }
-function installedWithNpm(self) {
-  let real = self;
-  try {
-    real = fs6.realpathSync(self);
-  } catch {
-  }
-  return real.split(path8.sep).includes("node_modules");
-}
 async function cmdModels() {
   const config = loadConfig();
   const catalog = await getJson(config, "/api/models");
@@ -1789,21 +1799,21 @@ function cmdInstall(args) {
     out("bitos is installed through npm and already on your PATH; nothing to do.");
     return;
   }
-  const code = fs6.readFileSync(self, "utf8");
+  const code = fs7.readFileSync(self, "utf8");
   if (!code.startsWith("#!/usr/bin/env node")) fatal("run install from the downloaded bitos script");
   const explicit = args.indexOf("--dir");
-  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path8.join(os7.homedir(), ".local", "bin")];
+  const candidates = explicit !== -1 ? [args[explicit + 1] ?? fatal("--dir needs a path")] : ["/usr/local/bin", path9.join(os7.homedir(), ".local", "bin")];
   for (const dir of candidates) {
     try {
-      fs6.mkdirSync(dir, { recursive: true });
-      fs6.accessSync(dir, fs6.constants.W_OK);
+      fs7.mkdirSync(dir, { recursive: true });
+      fs7.accessSync(dir, fs7.constants.W_OK);
     } catch {
       continue;
     }
-    const dest = path8.join(dir, "bitos");
-    fs6.writeFileSync(dest, code, { mode: 493 });
+    const dest = path9.join(dir, "bitos");
+    fs7.writeFileSync(dest, code, { mode: 493 });
     out(`installed ${dest}`);
-    const onPath = (process.env["PATH"] ?? "").split(path8.delimiter).includes(dir);
+    const onPath = (process.env["PATH"] ?? "").split(path9.delimiter).includes(dir);
     if (!onPath) {
       const rc = (process.env["SHELL"] ?? "").endsWith("zsh") ? "~/.zshrc" : "~/.bashrc";
       out(`${dir} is not on your PATH yet \u2014 add this line to ${rc}, then open a new terminal:`);
@@ -1829,7 +1839,7 @@ async function cmdUpdate() {
   if (!res.ok) fatal(`the gateway has no CLI build to offer (HTTP ${res.status})`);
   const code = await res.text();
   if (!code.startsWith("#!/usr/bin/env node")) fatal("downloaded file does not look like bitos");
-  fs6.writeFileSync(self, code, { mode: 493 });
+  fs7.writeFileSync(self, code, { mode: 493 });
   out(`updated ${self}`);
 }
 async function main() {
@@ -1858,7 +1868,7 @@ async function main() {
       case "version":
       case "--version":
       case "-v":
-        return out(`bitos ${"0.1.1"}`);
+        return out(describeInstall(process.argv[1], loadConfig().gateway));
       case "install":
         return cmdInstall(args);
       case "update":
