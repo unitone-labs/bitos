@@ -1388,7 +1388,7 @@ ${receipt}
 }
 
 // src/main.ts
-var NPM_PACKAGE = "@bitos.dev/bitos";
+var NPM_PACKAGE = "bitos-cli";
 var HELP = `bitos \u2014 every web3 intelligence, one command away.
 
 USAGE
@@ -1408,7 +1408,7 @@ COMMANDS
   status                    Gateway health at a glance
   config set <k> <v>        Set gateway | beta-password
   install                   Put bitos on your PATH (~/.local/bin) so it runs anywhere
-  update                    Replace this binary with the gateway's latest (npm installs: npm i -g @bitos.dev/bitos@latest)
+  update                    Replace this binary with the gateway's latest (npm installs: npm i -g bitos-cli@latest)
   version                   Print the version
 
 Files live in your account's folder on the gateway, mirrored to the
