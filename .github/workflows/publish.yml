@@ -8,8 +8,10 @@
 #
 # `dist/bitos.mjs` is committed here by the monorepo's
 # scripts/export-cli-package.sh, so nothing is built in this job. A release
-# that failed before the setup is re-run from the Actions tab (or
-# `gh workflow run publish.yml --ref v<version>`).
+# that failed before the setup is re-run by hand from the Actions tab or
+# with `gh workflow run publish.yml --ref main`: a manual run publishes the
+# version package.json names (npm refuses a version it already has), and
+# the tag check below applies to tag pushes only.
 name: publish
 
 on:
@@ -33,7 +35,8 @@ jobs:
           registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1 or newer; Node 22 ships an older one.
       - run: npm install -g npm@latest
-      - name: the tag must name the version in package.json
+      - name: a pushed tag must name the version in package.json
+        if: github.ref_type == 'tag'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(node -p "require('./package.json').version")"
