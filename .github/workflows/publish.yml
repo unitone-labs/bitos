@@ -29,12 +29,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # No `registry-url` here: with it, setup-node writes a placeholder
+      # auth token into .npmrc, and npm would try that token instead of the
+      # OIDC exchange. The default registry is npmjs.org anyway.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1 or newer; Node 22 ships an older one.
       - run: npm install -g npm@latest
+      - run: npm --version
       - name: a pushed tag must name the version in package.json
         if: github.ref_type == 'tag'
         run: |
