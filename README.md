@@ -35,9 +35,19 @@ From the repo: `pnpm --filter bitos build && node apps/cli/dist/bitos.mjs help`.
 
 `bitos` with no arguments is the console. In **agent** mode (the default)
 the model can read, search, edit and write files here and run commands.
-Reads just happen; writes and commands ask first (`y` / `n` / `a` for always
-this session, or start with `--yes`). Each tool call prints as it runs; the
-answer gets a light Markdown pass.
+Reads just happen. Writes and commands ask first — unless the mode, a rule
+of this folder or the built-in read-only list already answers (see
+Permissions). Each tool call prints as it runs, the way Claude Code taught
+everyone to read it: one line for the call, a few for what came back, a
+diff before every edit; the answer gets a light Markdown pass; the receipt
+closes the turn.
+
+While the model works, one line shows the route (lane, network, model),
+how long the turn has run and what it has used so far; it fits the
+terminal's width. `Esc` or Ctrl-C cancels the turn. `@path` in a message
+attaches that file; a line starting with `!` runs a command yourself and
+puts its output on the record for the agent. Tab completes `/commands`
+and `@paths`.
 
 What the agent knows about your project:
 
@@ -54,6 +64,35 @@ What the agent knows about your project:
 - **No loops.** The same call three times running is stopped and you are
   asked.
 
+## Permissions
+
+At a question, `Enter` or `y` says yes once; `a` allows that kind of call
+from now on in this folder (the rule is written to
+`.bitos/permissions.json`, personal, never committed); `s` stops the
+questions for the session; `n` says no — and `n <why>` tells the agent
+why, which is what it hears instead of trying another way.
+
+Rules are spelled the way Claude Code spells them: `run_command(git:*)`
+(any command starting with `git`), `run_command(npm test)` (exactly that),
+`edit_file`, `write_file(src/:*)`. `/permissions` lists them,
+`/permissions allow <rule>` and `deny <rule>` add one, `clear` empties the
+file. A deny rule wins in every mode.
+
+Modes, with `/mode` in the console or `--mode` when starting it:
+
+- `ask` (default): writes and commands ask, unless a rule answers.
+- `edits`: file edits inside this folder just happen, and so do `mkdir`,
+  `touch`, `mv` and `cp` inside it; commands still ask.
+- `all`: nothing asks (`/yes`, `--yes`).
+- `plan`: the model gets the read-only tools only and is told to plan;
+  `/mode ask` to build.
+
+Built in, in every mode: a command that only reads — `ls`, `cat`, `grep`,
+`find`, `git status`, `git diff`, `npm ls`, a pipeline of those — runs
+without a question as long as it stays inside this folder and names no
+secrets file. Command output that looks like a secret (`API_KEY=…`, a
+line from `.env`) is redacted before the model sees it.
+
 ## Sessions
 
 The conversation is kept in `.bitos/sessions/` in the folder you run
@@ -63,6 +102,11 @@ starts fresh, `/sessions` lists the folder's sessions, `/resume <n>`
 switches to one. The folder ignores itself in git. Ctrl-C cancels the
 turn in progress (the messages of that turn are dropped) and leaves only
 when nothing is running.
+
+A long conversation folds: past 150k characters the next turn starts by
+compacting the history into a summary written by the model (what was
+asked, what was done, what is open), and `/compact [focus]` does it on
+demand. `/usage` shows how much context the session carries.
 
 ## Models and cost
 
@@ -97,7 +141,8 @@ order and the process exits after the last answer.
 
 ```
 bitos login                        # browser sign-in
-bitos ask "price of sn64"          # one task, receipt on stderr
+bitos run "add tests for utils"    # one agent task here, no console: --json, --yes, --mode edits|plan
+bitos ask "price of sn64"          # one task on the brain, receipt on stderr
 bitos ask --lane code "…"          # pin the lane
 bitos files put ./docs             # upload a whole folder
 bitos files ls                     # uploads and memory notes, by name
