@@ -1,17 +1,26 @@
-# The standalone `bitos` package repository publishes to npm on a tag `v<version>`.
-# The tag must match package.json, and the repository needs the secret NPM_TOKEN
-# (an npm automation token). `dist/bitos.mjs` is committed here by the monorepo's
-# scripts/export-cli-package.sh, so nothing is built in this job.
+# The standalone `bitos` package repository publishes to npm on a tag
+# `v<version>` through npm trusted publishing: the job proves it is this
+# repository's publish.yml with a GitHub OIDC token, npm mints a short-lived
+# credential for that one run, and no npm token, password or 2FA code is
+# involved. One-time setup on npmjs.com, package bitos-cli → Settings →
+# Trusted publishing → GitHub Actions: organization unitone-labs,
+# repository bitos, workflow publish.yml, no environment.
+#
+# `dist/bitos.mjs` is committed here by the monorepo's
+# scripts/export-cli-package.sh, so nothing is built in this job. A release
+# that failed before the setup is re-run from the Actions tab (or
+# `gh workflow run publish.yml --ref v<version>`).
 name: publish
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
+  id-token: write # the OIDC token npm trusts
 
 jobs:
   publish:
@@ -22,6 +31,8 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 ships an older one.
+      - run: npm install -g npm@latest
       - name: the tag must name the version in package.json
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -29,5 +40,3 @@ jobs:
           test "$tag" = "$pkg" || { echo "tag $tag != package.json $pkg"; exit 1; }
       - run: node dist/bitos.mjs version
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
